@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://db.bzqsfhzcxfcilcfzopjj.supabase.co:5432/postgres?user=postgres&password=HarshadaSumithrms123
+    username: postgres
+    password: HarshadaSumithrms123
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+  flyway:
+    enabled: false
+
+app:
+  jwt:
+    secret: 7A9Df3kL2mNpQrStUvWxYz1B4cE6hJ8K0oBiCeDfGhIjKlMnOpQrStUvWxYzAb
+    expiration: 604800000
