@@ -11,15 +11,17 @@ import java.util.Optional;
 @Repository
 public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
 
-    // Get all attendance for one employee
     List<Attendance> findByEmployeeId(Long employeeId);
 
-    // Get attendance between two dates for an employee
     List<Attendance> findByEmployeeIdAndClockInBetween(
             Long employeeId,
             LocalDateTime start,
             LocalDateTime end);
 
-    // Find today's open attendance (clocked in but not out yet)
     Optional<Attendance> findByEmployeeIdAndClockOutIsNull(Long employeeId);
+
+    List<Attendance> findByClockInBetweenAndWorkMode(
+            LocalDateTime start,
+            LocalDateTime end,
+            String workMode);
 }
