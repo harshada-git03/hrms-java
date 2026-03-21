@@ -6,6 +6,7 @@ import com.hrms.hrms_backend.repository.EmployeeRepository;
 import com.hrms.hrms_backend.repository.LeaveRequestRepository;
 import com.hrms.hrms_backend.repository.PayrollRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GeminiService {
@@ -31,13 +33,8 @@ public class GeminiService {
     private final WebClient.Builder webClientBuilder;
 
     public String chat(Long employeeId, String userMessage) {
-        // 1. Build context from employee's real data
         String context = buildContext(employeeId);
-
-        // 2. Build the full prompt
         String prompt = context + "\n\nEmployee question: " + userMessage;
-
-        // 3. Call Gemini API
         return callGemini(prompt);
     }
 
@@ -45,46 +42,56 @@ public class GeminiService {
         Employee employee = employeeRepository.findById(employeeId)
                 .orElseThrow(() -> new RuntimeException("Employee not found"));
 
-        // Leave summary
-        long totalLeaves = leaveRequestRepository
-                .findByEmployeeId(employeeId).size();
-        long approvedLeaves = leaveRequestRepository
-                .findByEmployeeIdAndStatus(employeeId, "APPROVED").size();
-        long pendingLeaves = leaveRequestRepository
-                .findByEmployeeIdAndStatus(employeeId, "PENDING").size();
+        long totalLeaves = leaveRequestRepository.findByEmployeeId(employeeId).size();
+        long approvedLeaves = leaveRequestRepository.findByEmployeeIdAndStatus(employeeId, "APPROVED").size();
+        long pendingLeaves = leaveRequestRepository.findByEmployeeIdAndStatus(employeeId, "PENDING").size();
+        long rejectedLeaves = leaveRequestRepository.findByEmployeeIdAndStatus(employeeId, "REJECTED").size();
+        long totalAttendance = attendanceRepository.findByEmployeeId(employeeId).size();
 
-        // Attendance summary
-        long totalAttendance = attendanceRepository
-                .findByEmployeeId(employeeId).size();
-
-        // Latest payroll
         var payrolls = payrollRepository.findByEmployeeId(employeeId);
-        String payrollInfo = payrolls.isEmpty() ? "No payroll records yet" :
-                "Latest net salary: ₹" + payrolls.get(payrolls.size() - 1).getNetSalary();
+        String payrollInfo = payrolls.isEmpty()
+                ? "No payroll records yet"
+                : "Latest net salary: ₹" + payrolls.get(payrolls.size() - 1).getNetSalary()
+                  + " (Month: " + payrolls.get(payrolls.size() - 1).getMonth()
+                  + "/" + payrolls.get(payrolls.size() - 1).getYear() + ")";
+
+        // Who is on leave today
+        LocalDate today = LocalDate.now();
+        long onLeaveToday = leaveRequestRepository.findByStatus("APPROVED")
+                .stream()
+                .filter(l -> !today.isBefore(l.getStartDate()) && !today.isAfter(l.getEndDate()))
+                .count();
 
         return String.format("""
-                You are an HR assistant for NexHR. You are helping %s (%s role).
+                You are a helpful HR assistant for NexHR system. You are currently helping %s (Role: %s).
                 
-                Their current data:
-                - Total leave requests: %d
+                === LIVE DATA FOR THIS EMPLOYEE ===
+                - Total leave requests submitted: %d
                 - Approved leaves: %d
                 - Pending leaves: %d
-                - Total days attended: %d
+                - Rejected leaves: %d
+                - Total attendance days logged: %d
                 - %s
+                - Employees on leave today: %d
                 - Today's date: %s
                 
-                Answer their HR related questions based on this data.
-                Be helpful, professional and concise.
-                If asked something outside HR scope, politely redirect.
+                === INSTRUCTIONS ===
+                - Answer based on the live data above
+                - Be concise, friendly and professional
+                - For anything outside HR scope, politely say you can only help with HR matters
+                - If asked about policies, give general HR best practices
+                - Always address the employee by their first name
                 """,
                 employee.getFullName(),
                 employee.getRole(),
                 totalLeaves,
                 approvedLeaves,
                 pendingLeaves,
+                rejectedLeaves,
                 totalAttendance,
                 payrollInfo,
-                LocalDate.now()
+                onLeaveToday,
+                today
         );
     }
 
@@ -100,23 +107,40 @@ public class GeminiService {
                 )
         );
 
-        try {
-            Map response = webClientBuilder.build()
-                    .post()
-                    .uri(url)
-                    .bodyValue(requestBody)
-                    .retrieve()
-                    .bodyToMono(Map.class)
-                    .block();
+        int maxRetries = 3;
+        int retryCount = 0;
 
-            // Extract text from Gemini response
-            var candidates = (List) response.get("candidates");
-            var content = (Map) ((Map) candidates.get(0)).get("content");
-            var parts = (List) content.get("parts");
-            return (String) ((Map) parts.get(0)).get("text");
+        while (retryCount < maxRetries) {
+            try {
+                Map response = webClientBuilder.build()
+                        .post()
+                        .uri(url)
+                        .bodyValue(requestBody)
+                        .retrieve()
+                        .bodyToMono(Map.class)
+                        .block();
 
-       } catch (Exception e) {
-    return "Error: " + e.getMessage();
-}
+                var candidates = (List) response.get("candidates");
+                var content = (Map) ((Map) candidates.get(0)).get("content");
+                var parts = (List) content.get("parts");
+                return (String) ((Map) parts.get(0)).get("text");
+
+            } catch (Exception e) {
+                retryCount++;
+                log.warn("Gemini call failed (attempt {}): {}", retryCount, e.getMessage());
+
+                if (e.getMessage() != null && e.getMessage().contains("429")) {
+                    try {
+                        log.info("Rate limited, waiting {}s before retry...", retryCount * 2);
+                        Thread.sleep(2000L * retryCount);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    return "I encountered an error: " + e.getMessage();
+                }
+            }
+        }
+        return "I'm currently busy due to high demand. Please try again in a moment! 🙏";
     }
 }

@@ -17,4 +17,6 @@ app:
     expiration: 604800000
   gemini:
     api-key: ${GEMINI_API_KEY}
-    model: gemini-1.5-flash-latest
+    model: gemini-2.5-flash
+  calendarific:
+    api-key: ${CALENDARIFIC_API_KEY}

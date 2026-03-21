@@ -25,10 +25,31 @@ public class LeaveService {
     // Apply for leave
     public LeaveResponse applyLeave(Long employeeId, LeaveRequestDto dto) {
         Employee employee = employeeRepository.findById(employeeId)
-                .orElseThrow(() -> new RuntimeException("Employee not found"));
+                .orElseThrow(() -> new RuntimeException("Employee not found with ID: " + employeeId));
+
+        if (dto.getStartDate() == null || dto.getEndDate() == null) {
+            throw new RuntimeException("Start date and end date are required");
+        }
 
         if (dto.getEndDate().isBefore(dto.getStartDate())) {
             throw new RuntimeException("End date cannot be before start date");
+        }
+
+       if (dto.getStartDate().isBefore(LocalDate.now().minusDays(1))) {
+    throw new RuntimeException("Cannot apply leave for past dates");
+}
+
+        // Check for overlapping leave requests
+        List<LeaveRequest> existingLeaves = leaveRequestRepository.findByEmployeeId(employeeId);
+        boolean hasOverlap = existingLeaves.stream()
+                .filter(l -> l.getStatus().equals("PENDING") || l.getStatus().equals("APPROVED"))
+                .anyMatch(l ->
+                        !dto.getStartDate().isAfter(l.getEndDate()) &&
+                        !dto.getEndDate().isBefore(l.getStartDate())
+                );
+
+        if (hasOverlap) {
+            throw new RuntimeException("You already have a leave request for overlapping dates");
         }
 
         LeaveRequest leave = new LeaveRequest();
@@ -52,10 +73,14 @@ public class LeaveService {
             throw new RuntimeException("Leave request already processed");
         }
 
+        if (!action.getAction().equals("APPROVED") && !action.getAction().equals("REJECTED")) {
+            throw new RuntimeException("Action must be APPROVED or REJECTED");
+        }
+
         Employee approver = employeeRepository.findById(approverId)
                 .orElseThrow(() -> new RuntimeException("Approver not found"));
 
-        leave.setStatus(action.getAction()); // APPROVED or REJECTED
+        leave.setStatus(action.getAction());
         leave.setApprovedBy(approver);
 
         if (action.getAction().equals("REJECTED")) {
@@ -76,6 +101,14 @@ public class LeaveService {
     // Get all pending leaves — for HR dashboard
     public List<LeaveResponse> getPendingLeaves() {
         return leaveRequestRepository.findByStatus("PENDING")
+                .stream()
+                .map(this::mapToResponse)
+                .collect(Collectors.toList());
+    }
+
+    // Get all leaves — for HR dashboard
+    public List<LeaveResponse> getAllLeaves() {
+        return leaveRequestRepository.findAll()
                 .stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
